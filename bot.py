@@ -41,18 +41,30 @@ REFERRAL_BONUS_JOINING = 40.00
 # ২. ডেটাবেস কানেকশন ও ইউজার টেবিল তৈরি/পড়া (অপরিবর্তিত)
 # -----------------
 
+Python
+
+# ... (উপরের অংশ ঠিক থাকবে)
+
+# DATABASE_URL ভেরিয়েবলটি (যা os.environ.get দিয়ে লোড করা) ঠিক থাকবে
+DATABASE_URL = os.environ.get("DATABASE_URL") 
+# ...
+
 def connect_db():
-    """Render ডেটাবেসের সাথে যুক্ত হয়"""
+    """Render ডেটাবেসের সাথে যুক্ত হতে হয়"""
     try:
-        # যদি BOT_TOKEN বা DATABASE_URL না পাওয়া যায়, তবে এরর দেওয়া হবে (Render এর ক্ষেত্রে)
-        if not DATABASE_URL:
-            logger.error("DATABASE_URL environment variable is not set.")
+        # Vercel Environment থেকে সরাসরি ভেরিয়েবল লোড করুন (অতিরিক্ত নিরাপত্তা)
+        db_url = os.environ.get("DATABASE_URL") 
+        
+        if not db_url:
+            logger.error("DATABASE_URL এনভায়রনমেন্ট ভেরিয়েবলটি সেট করা নেই")
             return None
-            
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require') 
+
+        conn = psycopg2.connect(db_url) # নতুন লোড করা ভেরিয়েবলটি ব্যবহার করুন
         return conn
+        
     except Exception as e:
-        logger.error(f"ডেটাবেস সংযোগে সমস্যা: {e}")
+        # সংযোগ ব্যর্থ হলে ত্রুটিটি Vercel লগে দেখান
+        logger.error(f"ডেটাবেসের সাথে সংযোগে সমস্যা: {e}")
         return None
 
 def create_table_if_not_exists():
