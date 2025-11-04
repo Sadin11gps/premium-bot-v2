@@ -68,65 +68,80 @@ def connect_db():
         return None
 
 def create_table_if_not_exists():
-    """ইউজারদের ডেটা সংরক্ষণের জন্য টেবিল তৈরি ও কলামগুলো যাচাই করে (মাইগ্রেশন সহ)"""
-    conn = connect_db()
-    if conn:
-        cursor = conn.cursor()
-        try:
-            # ১. প্রধান টেবিল তৈরি করা (যদি না থাকে)
+    """ইউজারদের ডেটাবেসে সংরক্ষণ করার জন্য টেবিল তৈরি করে"""
+    conn = None
+    cursor = None
+    try:
+        conn = connect_db()
+        if conn:
+            cursor = conn.cursor()
+
+            # ১. প্রধান টেবিল তৈরি করুন
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
-                    status TEXT DEFAULT 'start',
+                    status TEXT DEFAULT 'free',
                     is_premium BOOLEAN DEFAULT FALSE,
                     expiry_date DATE,
-                    
-                    premium_balance DECIMAL(10, 2) DEFAULT 0.00,
-                    free_income DECIMAL(10, 2) DEFAULT 0.00,
-                    refer_balance DECIMAL(10, 2) DEFAULT 0.00,
-                    salary_balance DECIMAL(10, 2) DEFAULT 0.00,
-                    total_withdraw DECIMAL(10, 2) DEFAULT 0.00,
-                    
+                    join_date DATE DEFAULT CURRENT_DATE,
+                    referral_count INTEGER DEFAULT 0,
+                    referred_by BIGINT,
+                    premium_balance DECIMAL(10, 2),
+                    free_income DECIMAL(10, 2),
+                    refer_balance DECIMAL(10, 2),
+                    salary_balance DECIMAL(10, 2),
+                    total_withdraw DECIMAL(10, 2),
                     wallet_address TEXT,
-                    referrer_id BIGINT DEFAULT NULL
+                    referrer_id BIGINT
                 );
             """)
+            
+            # ডেটাবেসে পরিবর্তন সেভ (কমিট) করা আবশ্যক
             conn.commit()
             
-            # ২. অনুপস্থিত কলামগুলো যোগ করা (মাইগ্রেশন ফিক্স)
+            # ২. অনুপস্থিত কলামগুলো যোগ করুন (যদি আগে টেবিল তৈরি হয়ে থাকে)
             columns_to_add = [
-                ('premium_balance', 'DECIMAL(10, 2) DEFAULT 0.00'),
-                ('free_income', 'DECIMAL(10, 2) DEFAULT 0.00'),
-                ('refer_balance', 'DECIMAL(10, 2) DEFAULT 0.00'),
-                ('salary_balance', 'DECIMAL(10, 2) DEFAULT 0.00'),
-                ('total_withdraw', 'DECIMAL(10, 2) DEFAULT 0.00'),
+                ('premium_balance', 'DECIMAL(10, 2)'),
+                ('free_income', 'DECIMAL(10, 2)'),
+                ('refer_balance', 'DECIMAL(10, 2)'),
+                ('salary_balance', 'DECIMAL(10, 2)'),
+                ('total_withdraw', 'DECIMAL(10, 2)'),
                 ('wallet_address', 'TEXT'),
-                ('referrer_id', 'BIGINT DEFAULT NULL')
+                ('referrer_id', 'BIGINT')
             ]
-            
+
             for column_name, column_type in columns_to_add:
                 try:
-                    # ALTER TABLE... ADD COLUMN IF NOT EXISTS শুধুমাত্র PostgreSQL 9.6+ এ কাজ করে
-                    # তাই সহজভাবে এটি করার জন্য চেষ্টা করা হচ্ছে
-                    cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type};")
+                    # ALTER TABLE... ADD COLUMN কমান্ড চালান
+                    cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
                     conn.commit()
-                    logger.info(f"কলাম যুক্ত হলো: {column_name}")
-                except psycopg2.errors.DuplicateColumn:
-                    # কলাম আগে থেকেই আছে
-                    conn.rollback() 
+                    # logger.info(f"কলাম যুক্ত করা হয়েছে: {column_name}")
+
                 except Exception as e:
-                    # অন্য কোনো এরর
-                    logger.warning(f"কলাম {column_name} যোগ করতে অন্য সমস্যা: {e}")
-                    conn.rollback()
+                    # যদি কলাম আগে থেকেই থাকে, তবে এই অংশটি ত্রুটি উপেক্ষা করবে
+                    if 'already exists' in str(e):
+                        conn.rollback()
+                        continue
+                    else:
+                        logger.warning(f"অন্যান্য ALTER TABLE ত্রুটি: {e}")
+                        conn.rollback() # ত্রুটি হলে Rollback করুন
 
+            logger.info("ডেটাবেস টেবিল ও কলাম সফলভাবে তৈরি বা ভেরিফাই করা হয়েছে।")
 
-            conn.commit()
-            logger.info("ইউজার টেবিল তৈরি/যাচাই ও মাইগ্রেশন সম্পন্ন হয়েছে।")
-        except Exception as e:
-            logger.error(f"টেবিল তৈরি বা মাইগ্রেশনে গুরুতর সমস্যা: {e}")
-        finally:
+    except Exception as e:
+        # সংযোগ বা টেবিল তৈরি ব্যর্থ হলে ত্রুটিটি Vercel লগে দেখাবে
+        logger.error(f"প্রধান টেবিল অপারেশনে সমস্যা: {e}")
+        if conn:
+            conn.rollback() # প্রধান ত্রুটি হলে Rollback করুন
+        return False # ফেইল হলে False রিটার্ন করুন
+
+    finally:
+        # সংযোগ এবং কার্সর বন্ধ করা
+        if cursor:
             cursor.close()
+        if conn:
             conn.close()
+    return True # সফল হলে True রিটার্ন করুন
 
 # ----------------------------------------------------
 # ৩. ইউজার রেজিস্ট্রেশন ও রেফারেল বোনাস লজিক (অপরিবর্তিত)
